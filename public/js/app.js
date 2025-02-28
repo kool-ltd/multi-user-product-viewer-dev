@@ -45,7 +45,7 @@ class App {
 
         this.init();
         this.setupScene();
-        this.setupLights();            // <-- Now defined
+        this.setupLights();
         this.setupInitialControls();
         this.setupInterface();
         this.setupSocketListeners();
@@ -202,6 +202,10 @@ class App {
     init() {
         this.container = document.getElementById('scene-container');
         this.scene = new THREE.Scene();
+        // Create a dedicated group for product parts.
+        this.productGroup = new THREE.Group();
+        this.scene.add(this.productGroup);
+
         this.camera = new THREE.PerspectiveCamera(
             75,
             window.innerWidth / window.innerHeight,
@@ -236,7 +240,6 @@ class App {
         });
     }
 
-    // Added setupLights method to create ambient and directional lights.
     setupLights() {
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambientLight);
@@ -287,9 +290,9 @@ class App {
         this.dragControls.enabled = true;
         this.setupControlsEventListeners();
 
-        // Touch event listeners (if desired) can be added here—but ensure not to block DragControls.
+        // Touch event listeners (if desired) can be added here—but let DragControls handle them.
         this.renderer.domElement.addEventListener('touchstart', (event) => {
-            // Allow touch events to be handled by DragControls.
+            // No extra action needed; DragControls will take care of touch events.
         });
     }
 
@@ -385,7 +388,8 @@ class App {
     
     clearExistingModels() {
         this.loadedModels.forEach(model => {
-            this.scene.remove(model);
+            // Remove from product group instead of the entire scene.
+            this.productGroup.remove(model);
         });
         this.loadedModels.clear();
         this.draggableObjects.length = 0;
@@ -424,7 +428,9 @@ class App {
                 };
 
                 this.draggableObjects.push(model);
-                this.scene.add(model);
+                // Instead of adding the model directly to the scene,
+                // add it to the dedicated productGroup.
+                this.productGroup.add(model);
                 this.loadedModels.set(name, model);
                 this.updateDragControls();
                 this.fitCameraToScene();
@@ -454,18 +460,18 @@ class App {
     }
 
     fitCameraToScene() {
-        // Compute the bounding box of the scene (or product group)
-        const box = new THREE.Box3().setFromObject(this.scene);
+        // Compute the bounding box of the productGroup only.
+        const box = new THREE.Box3().setFromObject(this.productGroup);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
         
-        // Adjust the camera distance (smaller multiplier zooms in)
+        // Adjust the camera distance [smaller multiplier zooms in].
         const maxDim = Math.max(size.x, size.y, size.z);
         const fov = this.camera.fov * (Math.PI / 180);
         let cameraZ = Math.abs(maxDim / Math.tan(fov / 2));
         cameraZ *= 1.2; // Reduced multiplier for a closer view
         
-        // Reposition the camera so that it looks at the center of the box.
+        // Reposition the camera so that it looks at the center of the product group.
         this.camera.position.set(center.x, center.y, center.z + cameraZ);
         this.orbitControls.target.copy(center);
         this.camera.updateProjectionMatrix();
@@ -495,26 +501,6 @@ class App {
 
     animate() {
         this.renderer.setAnimationLoop(() => {
-            // If using XR controllers to move objects.
-            if (this.selectedObject && this.activeController) {
-                const currentPosition = new THREE.Vector3();
-                currentPosition.setFromMatrixPosition(this.activeController.matrixWorld);
-                const delta = new THREE.Vector3().subVectors(
-                    currentPosition, 
-                    this.lastControllerPosition
-                );
-                this.selectedObject.position.add(delta);
-                this.lastControllerPosition.copy(currentPosition);
-                if (this.isHost) {
-                    this.socket.emit('model-transform', {
-                        id: this.selectedObject.uuid,
-                        position: this.selectedObject.position.toArray(),
-                        rotation: this.selectedObject.rotation.toArray(),
-                        scale: this.selectedObject.scale.toArray()
-                    });
-                }
-            }
-            
             this.orbitControls.update();
             this.interactionManager.update();
             this.renderer.render(this.scene, this.camera);
