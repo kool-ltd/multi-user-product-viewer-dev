@@ -279,11 +279,18 @@ class App {
     }
 
     setupControlsEventListeners() {
-        this.dragControls.addEventListener('dragstart', () => {
+        this.dragControls.addEventListener('dragstart', (event) => {
+            // Stop the event propagation to prevent OrbitControls from interfering
+            if (event.sourceEvent) {
+                event.sourceEvent.stopPropagation();
+            }
             this.orbitControls.enabled = false;
             this.isDragging = true;
         });
-        this.dragControls.addEventListener('dragend', () => {
+        this.dragControls.addEventListener('dragend', (event) => {
+            if (event.sourceEvent) {
+                event.sourceEvent.stopPropagation();
+            }
             this.orbitControls.enabled = true;
             this.isDragging = false;
         });
