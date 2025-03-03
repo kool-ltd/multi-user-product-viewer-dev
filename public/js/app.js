@@ -12,10 +12,11 @@ const io = window.io;
 
 class App {
     constructor() {
-        this.loadedModels = new Map();
+        this.loadedModels = new Map(); // store containers by custom ID
         this.draggableObjects = [];
         this.isARMode = false;
         this.socket = io();
+        this.isDragging = false; // flag to control dragging
 
         // Setup host/viewer roles via URL parameter
         const urlParams = new URLSearchParams(window.location.search);
@@ -31,7 +32,6 @@ class App {
                 overlay.style.display = 'none';
             }
         });
-
         this.loadingManager.onProgress = (url, loaded, total) => {
             const loadingText = document.getElementById('loading-text');
             if (loadingText) {
@@ -45,7 +45,7 @@ class App {
 
         this.init();
         this.setupScene();
-        this.setupLights();            // <-- Now defined
+        this.setupLights();
         this.setupInitialControls();
         this.setupInterface();
         this.setupSocketListeners();
@@ -66,7 +66,7 @@ class App {
     }
 
     setupSocketListeners() {
-        // Host broadcasts camera and model updates.
+        // Host broadcasts camera updates.
         if (this.isHost) {
             this.orbitControls.addEventListener('change', () => {
                 const cameraState = {
@@ -76,20 +76,8 @@ class App {
                 };
                 this.socket.emit('camera-update', cameraState);
             });
-
-            this.dragControls.addEventListener('drag', (event) => {
-                const object = event.object;
-                const modelState = {
-                    id: object.uuid,
-                    position: object.position.toArray(),
-                    rotation: object.rotation.toArray(),
-                    scale: object.scale.toArray()
-                };
-                this.socket.emit('model-transform', modelState);
-            });
         }
 
-        // Viewers receive updates.
         this.socket.on('camera-update', (cameraState) => {
             if (!this.isHost) {
                 this.camera.position.fromArray(cameraState.position);
@@ -101,24 +89,26 @@ class App {
             }
         });
 
+        // Update model transforms by directly looking up in loadedModels.
         this.socket.on('model-transform', (modelState) => {
             if (!this.isHost) {
-                const object = this.scene.getObjectByProperty('uuid', modelState.id);
+                const object = this.loadedModels.get(modelState.customId);
                 if (object) {
                     object.position.fromArray(modelState.position);
                     object.rotation.fromArray(modelState.rotation);
                     object.scale.fromArray(modelState.scale);
+                } else {
+                    console.warn('No object found for customId:', modelState.customId);
                 }
             }
         });
 
-        // AR mode synchronization.
+        // AR mode syncing.
         this.socket.on('ar-session-start', () => {
             if (!this.isHost) {
                 this.scene.background = null;
             }
         });
-
         this.socket.on('ar-session-end', () => {
             if (!this.isHost) {
                 this.scene.background = new THREE.Color(0xcccccc);
@@ -131,7 +121,6 @@ class App {
                 this.loadModel(modelData.url, modelData.name);
             }
         });
-
         this.socket.on('models-cleared', () => {
             if (!this.isHost) {
                 this.clearExistingModels();
@@ -168,23 +157,22 @@ class App {
                     this.orbitControls.target.fromArray(state.camera.target);
                     this.orbitControls.update();
                 }
-
                 state.models.forEach(modelState => {
-                    const model = this.loadedModels.get(modelState.name);
-                    if (model) {
-                        model.position.fromArray(modelState.position);
-                        model.rotation.fromArray(modelState.rotation);
-                        model.scale.fromArray(modelState.scale);
+                    const object = this.loadedModels.get(modelState.name);
+                    if (object) {
+                        object.position.fromArray(modelState.position);
+                        object.rotation.fromArray(modelState.rotation);
+                        object.scale.fromArray(modelState.scale);
                     }
                 });
             }
         });
         
-        // Handle viewer uploads.
+        // Viewer upload.
         this.socket.on('viewer-upload', (modelData) => {
             fetch(modelData.data)
-                .then(res => res.blob())
-                .then(blob => {
+                .then((res) => res.blob())
+                .then((blob) => {
                     const url = URL.createObjectURL(blob);
                     this.loadModel(url, modelData.name);
                 });
@@ -202,6 +190,10 @@ class App {
     init() {
         this.container = document.getElementById('scene-container');
         this.scene = new THREE.Scene();
+        // Create a dedicated group for product parts.
+        this.productGroup = new THREE.Group();
+        this.scene.add(this.productGroup);
+
         this.camera = new THREE.PerspectiveCamera(
             75,
             window.innerWidth / window.innerHeight,
@@ -224,23 +216,22 @@ class App {
 
     setupScene() {
         this.scene.background = new THREE.Color(0xcccccc);
-
-        this.rgbeLoader.load('https://raw.githubusercontent.com/kool-ltd/product-viewer/main/assets/brown_photostudio_02_4k.hdr', (texture) => {
-            texture.mapping = THREE.EquirectangularReflectionMapping;
-            this.scene.environment = texture;
-            
-            this.renderer.physicallyCorrectLights = true;
-            this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-            this.renderer.toneMappingExposure = 0.7;
-            this.renderer.outputEncoding = THREE.sRGBEncoding;
-        });
+        this.rgbeLoader.load(
+            'https://raw.githubusercontent.com/kool-ltd/product-viewer/main/assets/brown_photostudio_02_4k.hdr',
+            (texture) => {
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                this.scene.environment = texture;
+                this.renderer.physicallyCorrectLights = true;
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                this.renderer.toneMappingExposure = 0.7;
+                this.renderer.outputEncoding = THREE.sRGBEncoding;
+            }
+        );
     }
 
-    // Added setupLights method to create ambient and directional lights.
     setupLights() {
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambientLight);
-
         const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
         directionalLight.position.set(5, 5, 5);
         this.scene.add(directionalLight);
@@ -254,9 +245,7 @@ class App {
                 domOverlay: { root: document.body }
             });
             document.body.appendChild(arButton);
-    
             this.setupXRControllers();
-    
             this.renderer.xr.addEventListener('sessionstart', () => {
                 console.log("AR session started");
                 this.isARMode = true;
@@ -266,7 +255,6 @@ class App {
                     this.socket.emit('ar-session-start');
                 }
             });
-    
             this.renderer.xr.addEventListener('sessionend', () => {
                 console.log("AR session ended");
                 this.isARMode = false;
@@ -286,21 +274,48 @@ class App {
         this.dragControls = new DragControls(this.draggableObjects, this.camera, this.renderer.domElement);
         this.dragControls.enabled = true;
         this.setupControlsEventListeners();
-
-        // Touch event listeners (if desired) can be added here—but ensure not to block DragControls.
-        this.renderer.domElement.addEventListener('touchstart', (event) => {
-            // Allow touch events to be handled by DragControls.
-        });
+        // Let DragControls handle touch events.
+        this.renderer.domElement.addEventListener('touchstart', (event) => {});
     }
 
     setupControlsEventListeners() {
-        this.dragControls.addEventListener('dragstart', () => {
+        this.dragControls.addEventListener('dragstart', (event) => {
+            // Stop the event propagation to prevent OrbitControls from interfering
+            if (event.sourceEvent) {
+                event.sourceEvent.stopPropagation();
+            }
             this.orbitControls.enabled = false;
+            this.isDragging = true;
         });
-
-        this.dragControls.addEventListener('dragend', () => {
+        this.dragControls.addEventListener('dragend', (event) => {
+            if (event.sourceEvent) {
+                event.sourceEvent.stopPropagation();
+            }
             this.orbitControls.enabled = true;
+            this.isDragging = false;
         });
+    }
+
+    updateDragControls() {
+        const draggableObjects = Array.from(this.loadedModels.values());
+        if (this.dragControls) {
+            this.dragControls.dispose();
+        }
+        this.dragControls = new DragControls(draggableObjects, this.camera, this.renderer.domElement);
+        this.setupControlsEventListeners();
+        if (this.isHost) {
+            this.dragControls.addEventListener('drag', (event) => {
+                const object = event.object;
+                const modelState = {
+                    customId: object.name,
+                    position: object.position.toArray(),
+                    rotation: object.rotation.toArray(),
+                    scale: object.scale.toArray()
+                };
+                console.log('[HOST] Broadcasting drag event:', modelState);
+                this.socket.emit('model-transform', modelState);
+            });
+        }
     }
 
     setupInterface() {
@@ -312,7 +327,6 @@ class App {
         controlsContainer.style.display = 'flex';
         controlsContainer.style.gap = '10px';
         controlsContainer.style.alignItems = 'center';
-
         const roleIndicator = document.createElement('div');
         roleIndicator.style.padding = '5px 10px';
         roleIndicator.style.borderRadius = '4px';
@@ -321,20 +335,17 @@ class App {
         roleIndicator.style.fontSize = '14px';
         roleIndicator.textContent = this.isHost ? 'Host' : 'Viewer';
         controlsContainer.appendChild(roleIndicator);
-
         const uploadContainer = document.createElement('div');
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
         fileInput.accept = '.glb,.gltf';
         fileInput.style.display = 'none';
         fileInput.multiple = true;
-
         const uploadButton = document.createElement('button');
         uploadButton.textContent = 'Upload Model';
         uploadButton.style.padding = '10px';
         uploadButton.style.cursor = 'pointer';
         uploadButton.onclick = () => fileInput.click();
-
         fileInput.onchange = (event) => {
             this.clearExistingModels();
             const files = event.target.files;
@@ -347,20 +358,17 @@ class App {
                 }
             }
         };
-
         uploadContainer.appendChild(uploadButton);
         uploadContainer.appendChild(fileInput);
         controlsContainer.appendChild(uploadContainer);
-
         if ('xr' in navigator) {
             const arButton = ARButton.createButton(this.renderer, {
                 requiredFeatures: ['hit-test'],
                 optionalFeatures: ['dom-overlay'],
                 domOverlay: { root: document.body }
             });
-            arButton.style.position = 'relative';
+            arButton.style.position = 'fixed';
             controlsContainer.appendChild(arButton);
-            
             this.renderer.xr.addEventListener('sessionstart', () => {
                 this.isARMode = true;
                 this.scene.background = null;
@@ -369,7 +377,6 @@ class App {
                     this.socket.emit('ar-session-start');
                 }
             });
-    
             this.renderer.xr.addEventListener('sessionend', () => {
                 this.isARMode = false;
                 this.scene.background = new THREE.Color(0xcccccc);
@@ -379,13 +386,13 @@ class App {
                 }
             });
         }
-
         document.body.appendChild(controlsContainer);
     }
     
     clearExistingModels() {
         this.loadedModels.forEach(model => {
-            this.scene.remove(model);
+            // Remove from product group.
+            this.productGroup.remove(model);
         });
         this.loadedModels.clear();
         this.draggableObjects.length = 0;
@@ -397,19 +404,29 @@ class App {
 
     loadModel(url, name) {
         this.gltfLoader.load(
-            url, 
+            url,
             (gltf) => {
+                // Wrap the loaded model inside a container group to ensure consistency.
                 const model = gltf.scene;
-                model.userData.isDraggable = true;
-                model.traverse((child) => {
-                    if (child !== model && child.isMesh) {
-                        child.raycast = () => [];
+                const container = new THREE.Group();
+                container.name = name; // Use custom ID for synchronization.
+                container.userData.isDraggable = true;
+                container.add(model);
+
+                // Rename any immediate descendant whose name may conflict with the container.
+                container.traverse(child => {
+                    if (child !== container && child.name === container.name) {
+                        child.name = `${child.name}_${child.uuid}`;
                     }
                 });
 
-                // Add a custom raycast so the product container can be selected.
-                model.raycast = function(raycaster, intersects) {
-                    const box = new THREE.Box3().setFromObject(model);
+                // Optional: log the hierarchy for debugging.
+                console.log(`Loaded container "${name}" with children:`);
+                container.children.forEach(child => console.log(child.name));
+
+                // Provide a custom raycast for the container.
+                container.raycast = function (raycaster, intersects) {
+                    const box = new THREE.Box3().setFromObject(container);
                     if (!box.isEmpty()) {
                         const intersectionPoint = new THREE.Vector3();
                         if (raycaster.ray.intersectBox(box, intersectionPoint)) {
@@ -417,15 +434,15 @@ class App {
                             intersects.push({
                                 distance: distance,
                                 point: intersectionPoint.clone(),
-                                object: model
+                                object: container
                             });
                         }
                     }
                 };
 
-                this.draggableObjects.push(model);
-                this.scene.add(model);
-                this.loadedModels.set(name, model);
+                this.draggableObjects.push(container);
+                this.productGroup.add(container);
+                this.loadedModels.set(name, container);
                 this.updateDragControls();
                 this.fitCameraToScene();
 
@@ -436,7 +453,7 @@ class App {
                 console.log(`Loaded model: ${name}`);
             },
             (xhr) => {
-                console.log(`${name} ${(xhr.loaded / xhr.total * 100)}% loaded`);
+                console.log(`${name} ${(xhr.loaded / xhr.total * 100).toFixed(2)}% loaded`);
             },
             (error) => {
                 console.error(`Error loading model ${name}:`, error);
@@ -444,49 +461,36 @@ class App {
         );
     }
 
-    updateDragControls() {
-        const draggableObjects = Array.from(this.loadedModels.values());
-        if (this.dragControls) {
-            this.dragControls.dispose();
-        }
-        this.dragControls = new DragControls(draggableObjects, this.camera, this.renderer.domElement);
-        this.setupControlsEventListeners();
-    }
-
     fitCameraToScene() {
-        // Compute the bounding box of the scene (or product group)
-        const box = new THREE.Box3().setFromObject(this.scene);
+        // Compute the bounding box of the productGroup only.
+        const box = new THREE.Box3().setFromObject(this.productGroup);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
-        
-        // Adjust the camera distance (smaller multiplier zooms in)
         const maxDim = Math.max(size.x, size.y, size.z);
         const fov = this.camera.fov * (Math.PI / 180);
         let cameraZ = Math.abs(maxDim / Math.tan(fov / 2));
-        cameraZ *= 1.2; // Reduced multiplier for a closer view
-        
-        // Reposition the camera so that it looks at the center of the box.
+        cameraZ *= 1.2;
         this.camera.position.set(center.x, center.y, center.z + cameraZ);
         this.orbitControls.target.copy(center);
         this.camera.updateProjectionMatrix();
         this.orbitControls.update();
     }
 
-    loadDefaultModels() {
-        const models = [
-            { url: './assets/kool-mandoline-blade.glb', name: 'blade' },
-            { url: './assets/kool-mandoline-frame.glb', name: 'frame' },
-            { url: './assets/kool-mandoline-handguard.glb', name: 'handguard' },
-            { url: './assets/kool-mandoline-handletpe.glb', name: 'handle' }
+    async loadDefaultProduct() {
+        const parts = [
+            { name: 'blade', file: 'kool-mandoline-blade.glb' },
+            { name: 'frame', file: 'kool-mandoline-frame.glb' },
+            { name: 'handguard', file: 'kool-mandoline-handguard.glb' },
+            { name: 'handle', file: 'kool-mandoline-handletpe.glb' }
         ];
-    
+
         // Clear existing models before loading defaults.
         this.clearExistingModels();
-    
-        models.forEach(model => {
-            this.loadModel(model.url, model.name);
-        });
-    
+
+        for (const part of parts) {
+            await this.loadModel(`assets/${part.file}`, part.name);
+        }
+
         // After models load, update draggable objects in the interaction manager.
         setTimeout(() => {
             this.interactionManager.setDraggableObjects(Array.from(this.loadedModels.values()));
@@ -495,27 +499,9 @@ class App {
 
     animate() {
         this.renderer.setAnimationLoop(() => {
-            // If using XR controllers to move objects.
-            if (this.selectedObject && this.activeController) {
-                const currentPosition = new THREE.Vector3();
-                currentPosition.setFromMatrixPosition(this.activeController.matrixWorld);
-                const delta = new THREE.Vector3().subVectors(
-                    currentPosition, 
-                    this.lastControllerPosition
-                );
-                this.selectedObject.position.add(delta);
-                this.lastControllerPosition.copy(currentPosition);
-                if (this.isHost) {
-                    this.socket.emit('model-transform', {
-                        id: this.selectedObject.uuid,
-                        position: this.selectedObject.position.toArray(),
-                        rotation: this.selectedObject.rotation.toArray(),
-                        scale: this.selectedObject.scale.toArray()
-                    });
-                }
+            if (!this.isDragging) {
+                this.orbitControls.update();
             }
-            
-            this.orbitControls.update();
             this.interactionManager.update();
             this.renderer.render(this.scene, this.camera);
         });
@@ -535,7 +521,6 @@ class App {
         overlay.style.justifyContent = 'center';
         overlay.style.alignItems = 'center';
         overlay.style.zIndex = '9999';
-
         overlay.innerHTML = `
             <div id="loading-spinner" style="
                 border: 11px solid #d00024; 
@@ -549,7 +534,6 @@ class App {
                 Loading...
             </div>
         `;
-
         const style = document.createElement('style');
         style.textContent = `
             @keyframes spin {
@@ -563,6 +547,6 @@ class App {
 }
 
 const app = new App();
-app.loadDefaultModels();
+app.loadDefaultProduct();
 
 export default app;
