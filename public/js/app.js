@@ -77,11 +77,11 @@ class App {
   }
 
   setupSocketListeners() {
-    // When a host-transfer-request is received:
+    // When a viewer’s host request is forwarded to the current host.
     this.socket.on('host-transfer-request', (data) => {
       if (this.isHost) {
         const confirmTransfer = confirm(
-          "A viewer is requesting to become host. Do you want to relinquish your host role?"
+          "A viewer has requested to become host. Do you want to relinquish your host role?"
         );
         if (confirmTransfer) {
           this.socket.emit('release-host', { requestId: data.requestId });
@@ -91,40 +91,40 @@ class App {
       }
     });
   
-    // When the server immediately denies a host request:
+    // When a host request is immediately denied (for example, because a host is already active).
     this.socket.on('transfer-denied', (data) => {
-      // The server sends a denial when a host is already active.
       alert("The current host has denied your request to become host.");
+      // Cancel any pending request since a denial was issued.
+      this.hostRequestPending = false;
+      if (this.hostRequestTimer) {
+        clearTimeout(this.hostRequestTimer);
+        this.hostRequestTimer = null;
+      }
     });
   
-    // When the host is changed (or a host is assigned):
+    // When the host changes, either because someone became host or the host gave up.
     this.socket.on('host-changed', (data) => {
-      console.log("Host changed event received:", data);
-      // Check for the existence of an active host using data.hostSocketId.
-      if (data.hostSocketId) {
-        // If the server provides a hostSocketId, then there is an active host.
-        // Mark this client as host only if its socket id matches the one provided.
-        this.isHost = (data.hostSocketId === this.socket.id);
-      } else {
-        // If no host is provided (or data.hostSocketId is null/empty),
-        // you may decide to let a viewer become host automatically
-        // or simply allow them to click the host button again.
-        // For this example, we'll assume no active host means the client isn’t host yet.
-        this.isHost = false;
-        console.log("No active host detected. You may request host role.");
+      // data.hostSocketId is the current host's socket (or null if no host is active).
+      this.currentHostId = data.hostSocketId;
+      // Set role: if hostSocketId exists and equals this client's id, then you are host.
+      this.isHost = data.hostSocketId ? (data.hostSocketId === this.socket.id) : false;
+      console.log("Host changed; new hostSocketId:", data.hostSocketId, "isHost:", this.isHost);
+  
+      // Clear the host request pending state (if any).
+      this.hostRequestPending = false;
+      if (this.hostRequestTimer) {
+        clearTimeout(this.hostRequestTimer);
+        this.hostRequestTimer = null;
       }
-      // Update the UI toggle to reflect the current role.
+      
+      // Update the toggle UI to reflect your new role.
       if (this.toggleUI) {
         updateToggleUI(this, this.toggleUI.viewerButton, this.toggleUI.hostButton, this.isHost);
       }
-      if (this.isHost) {
-        console.log("You are now the host.");
-      }
     });
   
-    // Handle model-transform events (for viewers updating a moved object):
+    // When receiving model transform events from the host.
     this.socket.on('model-transform', (modelState) => {
-      console.log("Viewer received model-transform:", modelState);
       if (!this.isHost) {
         const object = this.loadedModels.get(modelState.customId);
         if (object) {
@@ -137,9 +137,8 @@ class App {
       }
     });
   
-    // Handle camera-update events (for viewers updating camera changes sent by the host):
+    // When receiving camera update events from the host.
     this.socket.on('camera-update', (cameraState) => {
-      console.log("Viewer received camera-update:", cameraState);
       if (!this.isHost) {
         this.camera.position.fromArray(cameraState.position);
         this.camera.rotation.fromArray(cameraState.rotation);
