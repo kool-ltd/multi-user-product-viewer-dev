@@ -106,7 +106,7 @@ export function setupUIControls(app) {
   controlsContainer.appendChild(toggleContainer);
 
   // ------------------------------
-  // Example: Create an Upload button (optional).
+  // Create an Upload button.
   // ------------------------------
   const uploadButton = document.createElement('button');
   uploadButton.textContent = 'Upload Model';
@@ -131,15 +131,28 @@ export function setupUIControls(app) {
   fileInput.accept = '.glb,.gltf';
   fileInput.style.display = 'none';
   fileInput.multiple = true;
-  fileInput.onchange = (event) => {
+  fileInput.onchange = async (event) => {
     app.clearExistingModels();
     const files = event.target.files;
     for (let file of files) {
-      const url = URL.createObjectURL(file);
-      const name = file.name.replace('.glb', '').replace('.gltf', '');
-      app.loadModel(url, name);
-      if (app.isHost) {
-        app.socket.emit('model-loaded', { url, name });
+      const formData = new FormData();
+      formData.append('model', file);
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          body: formData
+        });
+        if (response.ok) {
+          const data = await response.json();
+          // data contains { url, name }
+          const name = data.name.replace('.glb', '').replace('.gltf', '');
+          // Load the model from the server URL.
+          app.loadModel(data.url, name);
+        } else {
+          console.error("Upload failed:", response.statusText);
+        }
+      } catch (error) {
+        console.error("File upload error:", error);
       }
     }
   };
