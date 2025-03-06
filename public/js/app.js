@@ -125,6 +125,25 @@ class App {
         }
       }
     });
+    
+    // New event listener for uploaded models:
+    this.socket.on('model-uploaded', (data) => {
+      // On host: if this model was uploaded by the host, ignore the duplicate broadcast.
+      if (this.isHost && data.sender === this.socket.id) {
+        console.log(`Ignoring duplicate broadcast for model: ${data.name}`);
+        return;
+      }
+      
+      // On viewer: clear existing (default) models before loading the new one.
+      if (!this.isHost) {
+        this.clearExistingModels();
+      }
+      
+      // Only load the model if it hasn't been loaded already.
+      if (!this.loadedModels.has(data.name)) {
+        this.loadModel(data.url, data.name);
+      }
+    });
   }
 
   onWindowResize() {
@@ -278,9 +297,8 @@ class App {
         this.productGroup.add(container);
         this.loadedModels.set(name, container);
 
-        // Update the App's drag controls...
+        // Update the App's drag controls and InteractionManager's draggable objects.
         this.updateDragControls();
-        // ...and, importantly, update the InteractionManager's draggable objects.
         this.interactionManager.setDraggableObjects(Array.from(this.loadedModels.values()));
         this.fitCameraToScene();
 
@@ -353,7 +371,6 @@ class App {
             this.productGroup.add(container);
             this.loadedModels.set(part.name, container);
             this.updateDragControls();
-            // Again update the InteractionManager's draggable objects:
             this.interactionManager.setDraggableObjects(Array.from(this.loadedModels.values()));
             this.fitCameraToScene();
 
