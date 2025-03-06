@@ -2,15 +2,16 @@
 
 import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { showViewerRequestModal, showConfirmationModal } from './modalManager.js';
 
 // Create the UI controls and attach them to the app.
 export function setupUIControls(app) {
-  // Initialize state tracking variables for host request.
+  // Initialize state variables for host requests.
   app.hostRequestPending = false;
   app.hostRequestTimer = null;
-  app.currentHostId = null; // Represents the server-reported active host (if any).
+  app.currentHostId = null; // Set by the server when a host is active.
 
-  // Create a container for controls.
+  // Create a container for the controls.
   const controlsContainer = document.createElement('div');
   controlsContainer.style.position = 'fixed';
   controlsContainer.style.top = '10px';
@@ -29,7 +30,7 @@ export function setupUIControls(app) {
   toggleContainer.style.borderRadius = '9999px';
   toggleContainer.style.backgroundColor = '#d00024';
 
-  // Create Viewer button.
+  // Create the Viewer button.
   const viewerButton = document.createElement('button');
   viewerButton.textContent = 'Viewer';
   viewerButton.style.padding = '5px 15px';
@@ -39,7 +40,7 @@ export function setupUIControls(app) {
   viewerButton.style.cursor = 'pointer';
   viewerButton.style.transition = 'background-color 0.3s ease, color 0.3s ease';
 
-  // Create Host button.
+  // Create the Host button.
   const hostButton = document.createElement('button');
   hostButton.textContent = 'Host';
   hostButton.style.padding = '5px 15px';
@@ -49,23 +50,18 @@ export function setupUIControls(app) {
   hostButton.style.cursor = 'pointer';
   hostButton.style.transition = 'background-color 0.3s ease, color 0.3s ease';
 
-  // Initial styling.
+  // Set initial styling.
   updateToggleUI(app, viewerButton, hostButton, app.isHost);
 
   // ------------------------------
   // Define actions for the toggle buttons.
   // ------------------------------
 
-  // Both buttons will toggle the role.
-  // When in host mode, clicking either button relinquishes host.
-  
-  // Viewer button:
+  // Viewer button: relinquish host role.
   viewerButton.addEventListener('click', () => {
     if (app.isHost) {
-      // If you are host, clicking Viewer relinquishes host role.
       app.socket.emit('give-up-host');
     } else {
-      // If you have a pending host request, cancel it.
       if (app.hostRequestPending) {
         app.socket.emit('cancel-host-request');
         app.hostRequestPending = false;
@@ -80,29 +76,27 @@ export function setupUIControls(app) {
     }
   });
 
-  // Host button:
+  // Host button.
   hostButton.addEventListener('click', () => {
     if (app.isHost) {
-      // If already host, relinquish host role.
       app.socket.emit('give-up-host');
     } else {
-      // Not currently host.
-      if (!app.hostRequestPending) {
-        app.hostRequestPending = true;
-        // Always use "request-host" even if no active host exists.
-        app.socket.emit('request-host');
-        console.log("Host request sent.");
-  
-        // Start the 20-second auto-promotion timer.
-        app.hostRequestTimer = setTimeout(() => {
-          if (app.hostRequestPending) {
-            app.hostRequestPending = false;
-            console.log("No response after 20 seconds. Auto-promoting to host.");
-            app.socket.emit('auto-promote');
-          }
-        }, 20000);
+      if (!app.currentHostId) {
+        console.log("No active host; becoming host immediately.");
+        app.currentHostId = app.socket.id;
+        app.isHost = true;
+        updateToggleUI(app, viewerButton, hostButton, app.isHost);
+        showConfirmationModal("You're now the host.");
+        app.socket.emit('register-host');
       } else {
-        console.log("Host request is already pending.");
+        if (!app.hostRequestPending) {
+          app.hostRequestPending = true;
+          app.socket.emit('request-host');
+          showViewerRequestModal(app, 30);
+          console.log("Host request modal shown.");
+        } else {
+          console.log("Host request is already pending.");
+        }
       }
     }
   });
@@ -112,7 +106,7 @@ export function setupUIControls(app) {
   controlsContainer.appendChild(toggleContainer);
 
   // ------------------------------
-  // Example: Create an Upload button (optional).
+  // Create an Upload button.
   // ------------------------------
   const uploadButton = document.createElement('button');
   uploadButton.textContent = 'Upload Model';
@@ -137,15 +131,28 @@ export function setupUIControls(app) {
   fileInput.accept = '.glb,.gltf';
   fileInput.style.display = 'none';
   fileInput.multiple = true;
-  fileInput.onchange = (event) => {
+  fileInput.onchange = async (event) => {
     app.clearExistingModels();
     const files = event.target.files;
     for (let file of files) {
-      const url = URL.createObjectURL(file);
-      const name = file.name.replace('.glb', '').replace('.gltf', '');
-      app.loadModel(url, name);
-      if (app.isHost) {
-        app.socket.emit('model-loaded', { url, name });
+      const formData = new FormData();
+      formData.append('model', file);
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          body: formData
+        });
+        if (response.ok) {
+          const data = await response.json();
+          // data contains { url, name }
+          const name = data.name.replace('.glb', '').replace('.gltf', '');
+          // Load the model from the server URL.
+          app.loadModel(data.url, name);
+        } else {
+          console.error("Upload failed:", response.statusText);
+        }
+      } catch (error) {
+        console.error("File upload error:", error);
       }
     }
   };
@@ -156,7 +163,7 @@ export function setupUIControls(app) {
   controlsContainer.appendChild(fileInput);
   
   // ------------------------------
-  // Optional: AR Button (if supported)
+  // Optional: AR Button (if supported).
   // ------------------------------
   if ('xr' in navigator) {
     const arButton = ARButton.createButton(app.renderer, {
@@ -189,11 +196,10 @@ export function setupUIControls(app) {
   
   document.body.appendChild(controlsContainer);
   
-  // Save references to buttons on the app instance for use in the socket listeners.
+  // Save references to the buttons.
   app.toggleUI = { viewerButton, hostButton };
 }
 
-// Helper to update the toggle UI based on whether the client is host.
 export function updateToggleUI(app, viewerButton, hostButton, isHost) {
   if (isHost) {
     hostButton.style.backgroundColor = 'white';
