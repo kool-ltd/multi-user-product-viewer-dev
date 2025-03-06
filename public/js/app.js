@@ -9,27 +9,24 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from './InteractionManager.js';
 import { setupUIControls, updateToggleUI } from './uiControls.js';
+import { showHostRequestModal, showConfirmationModal } from './modalManager.js';
 
-// Ensure your socket.io client library is loaded on the page.
+// Ensure your socket.io client library is loaded.
 const io = window.io;
 
 class App {
   constructor() {
-    // Maps, flags, and initial state.
     this.loadedModels = new Map();
     this.draggableObjects = [];
     this.isARMode = false;
     this.socket = io();
     this.isDragging = false;
 
-    // Determine initial role based on URL parameters.
-    const urlParams = new URLSearchParams(window.location.search);
-    this.isHost = urlParams.get('role') === 'host';
+    // Determine if the current client is host.
+    this.isHost = new URLSearchParams(window.location.search).get('role') === 'host';
 
-    // Create the loading overlay.
     this.createLoadingOverlay();
 
-    // Setup loading manager.
     this.loadingManager = new THREE.LoadingManager(() => {
       const overlay = document.getElementById('loading-overlay');
       if (overlay) {
@@ -43,23 +40,18 @@ class App {
       }
     };
 
-    // Create loaders.
     this.gltfLoader = new GLTFLoader(this.loadingManager);
     this.rgbeLoader = new RGBELoader(this.loadingManager);
 
-    // Initialize the scene, camera, and renderer.
     this.init();
     this.setupScene();
     this.setupLights();
     this.setupInitialControls();
 
-    // Set up the UI controls from a separate module.
     setupUIControls(this);
 
-    // Setup socket listeners.
     this.setupSocketListeners();
 
-    // Create the interaction manager.
     this.interactionManager = new InteractionManager(
       this.scene,
       this.camera,
@@ -68,33 +60,21 @@ class App {
     );
 
     if (this.isHost) {
-      // If the current role is host, register immediately.
       this.socket.emit('register-host');
     }
 
-    // Start the animation loop.
     this.animate();
   }
 
   setupSocketListeners() {
-    // When a viewer’s host request is forwarded to the current host.
     this.socket.on('host-transfer-request', (data) => {
       if (this.isHost) {
-        const confirmTransfer = confirm(
-          "A viewer has requested to become host. Do you want to relinquish your host role?"
-        );
-        if (confirmTransfer) {
-          this.socket.emit('release-host', { requestId: data.requestId });
-        } else {
-          this.socket.emit('deny-host', { requestId: data.requestId });
-        }
+        showHostRequestModal(this, data, 30);
       }
     });
   
-    // When a host request is immediately denied (for example, because a host is already active).
     this.socket.on('transfer-denied', (data) => {
-      alert("The current host has denied your request to become host.");
-      // Cancel any pending request since a denial was issued.
+      showConfirmationModal("Your request has been denied.");
       this.hostRequestPending = false;
       if (this.hostRequestTimer) {
         clearTimeout(this.hostRequestTimer);
@@ -102,28 +82,26 @@ class App {
       }
     });
   
-    // When the host changes, either because someone became host or the host gave up.
     this.socket.on('host-changed', (data) => {
-      // data.hostSocketId is the current host's socket (or null if no host is active).
       this.currentHostId = data.hostSocketId;
-      // Set role: if hostSocketId exists and equals this client's id, then you are host.
       this.isHost = data.hostSocketId ? (data.hostSocketId === this.socket.id) : false;
       console.log("Host changed; new hostSocketId:", data.hostSocketId, "isHost:", this.isHost);
   
-      // Clear the host request pending state (if any).
       this.hostRequestPending = false;
       if (this.hostRequestTimer) {
         clearTimeout(this.hostRequestTimer);
         this.hostRequestTimer = null;
       }
       
-      // Update the toggle UI to reflect your new role.
       if (this.toggleUI) {
         updateToggleUI(this, this.toggleUI.viewerButton, this.toggleUI.hostButton, this.isHost);
       }
+      
+      if (this.isHost) {
+        showConfirmationModal("You're now the host.");
+      }
     });
   
-    // When receiving model transform events from the host.
     this.socket.on('model-transform', (modelState) => {
       if (!this.isHost) {
         const object = this.loadedModels.get(modelState.customId);
@@ -137,7 +115,6 @@ class App {
       }
     });
   
-    // When receiving camera update events from the host.
     this.socket.on('camera-update', (cameraState) => {
       if (!this.isHost) {
         this.camera.position.fromArray(cameraState.position);
@@ -162,7 +139,6 @@ class App {
     this.container = document.getElementById('scene-container');
     this.scene = new THREE.Scene();
 
-    // Create a group for your product parts.
     this.productGroup = new THREE.Group();
     this.scene.add(this.productGroup);
 
@@ -213,7 +189,6 @@ class App {
           rotation: this.camera.rotation.toArray(),
           target: this.orbitControls.target.toArray()
         };
-        console.log("Host emitting camera-update:", cameraState);
         this.socket.emit('camera-update', cameraState);
       }
     });
@@ -222,8 +197,7 @@ class App {
     this.dragControls.enabled = true;
     this.setupControlsEventListeners();
 
-    // Let DragControls handle touch events.
-    this.renderer.domElement.addEventListener('touchstart', (event) => {});
+    this.renderer.domElement.addEventListener('touchstart', () => {});
   }
 
   setupControlsEventListeners() {
@@ -249,7 +223,6 @@ class App {
           rotation: object.rotation.toArray(),
           scale: object.scale.toArray()
         };
-        console.log("Host emitting model-transform:", modelState);
         this.socket.emit('model-transform', modelState);
       }
     });
@@ -286,7 +259,6 @@ class App {
         container.userData.isDraggable = true;
         container.add(model);
 
-        // Custom raycast for container.
         container.raycast = function (raycaster, intersects) {
           const box = new THREE.Box3().setFromObject(container);
           if (!box.isEmpty()) {
@@ -305,7 +277,11 @@ class App {
         this.draggableObjects.push(container);
         this.productGroup.add(container);
         this.loadedModels.set(name, container);
+
+        // Update the App's drag controls...
         this.updateDragControls();
+        // ...and, importantly, update the InteractionManager's draggable objects.
+        this.interactionManager.setDraggableObjects(Array.from(this.loadedModels.values()));
         this.fitCameraToScene();
 
         if (this.isHost) {
@@ -377,6 +353,8 @@ class App {
             this.productGroup.add(container);
             this.loadedModels.set(part.name, container);
             this.updateDragControls();
+            // Again update the InteractionManager's draggable objects:
+            this.interactionManager.setDraggableObjects(Array.from(this.loadedModels.values()));
             this.fitCameraToScene();
 
             if (this.isHost) {
