@@ -27,6 +27,9 @@ app.use(express.static('public'));
 // Serve files from the uploads folder.
 app.use('/uploads', express.static(uploadDir));
 
+// Add middleware to parse form fields (multer does that for text fields too)
+app.use(express.urlencoded({ extended: true }));
+
 // Configure Multer for file uploads, keeping the original filename.
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -50,15 +53,18 @@ app.post('/upload', upload.single('model'), (req, res) => {
 
   // Construct the base URL using environment variable or fallback to request host.
   const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  console.log("Using baseUrl:", baseUrl); // For debugging.
+  console.log("Using baseUrl:", baseUrl);
 
   const fileUrl = `${baseUrl}/uploads/${req.file.filename}`;
 
-  // Extract uploader's socket id from custom header "x-socket-id".
-  const uploaderId = req.headers['x-socket-id'];
+  // Extract uploader's socket id from header, query parameter, or body (if sent as part of form data)
+  const uploaderId =
+    req.headers['x-socket-id'] || req.query.socketId || req.body.socketId;
+  console.log("Uploader ID:", uploaderId, "Host Socket ID:", hostSocketId);
 
-  // Broadcast to all connected sockets except the uploader.
-  if (uploaderId) {
+  // Only broadcast if the uploader is the current host.
+  if (uploaderId && uploaderId === hostSocketId) {
+    // Broadcast to all connected sockets except the uploader.
     for (const [id, socketInstance] of io.of("/").sockets) {
       if (id !== uploaderId) {
         socketInstance.emit('model-uploaded', {
@@ -69,13 +75,9 @@ app.post('/upload', upload.single('model'), (req, res) => {
         });
       }
     }
+    console.log("File uploaded by host. Broadcast sent.");
   } else {
-    // Fallback broadcast if uploaderId is not provided.
-    io.emit('model-uploaded', {
-      url: fileUrl,
-      name: req.file.originalname,
-      id: uuidv4()
-    });
+    console.log("File uploaded by a viewer (or uploaderId missing); broadcast skipped.");
   }
 
   res.json({ url: fileUrl, name: req.file.originalname });

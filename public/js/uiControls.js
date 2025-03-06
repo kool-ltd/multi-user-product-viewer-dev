@@ -137,6 +137,8 @@ export function setupUIControls(app) {
     for (let file of files) {
       const formData = new FormData();
       formData.append('model', file);
+      // Append the socket ID so the server knows who is uploading.
+      formData.append('socketId', app.socket.id);
       try {
         const response = await fetch('/upload', {
           method: 'POST',
