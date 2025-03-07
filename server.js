@@ -38,7 +38,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// Global state for managing host and host-transfer requests.
+// Global state for host management and pending requests.
 let hostSocketId = null;
 let pendingRequests = {}; // { requestId: { timeout: TimeoutObject, requester: socketId } }
 
@@ -48,34 +48,27 @@ app.post('/upload', upload.single('model'), (req, res) => {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
-  // Construct the base URL using environment variable or fallback to request host.
+  // Construct the base URL from environment variable or fallback to request host.
   const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  console.log("Using baseUrl:", baseUrl); // For debugging.
+  console.log("Using baseUrl:", baseUrl);
 
   const fileUrl = `${baseUrl}/uploads/${req.file.filename}`;
 
-  // Extract uploader's socket id from custom header "x-socket-id".
+  // Extract uploader's socket id and uploader's role from custom headers.
   const uploaderId = req.headers['x-socket-id'];
+  const uploaderRole = req.headers['x-uploader-role'] || 'viewer';
 
-  // Broadcast to all connected sockets except the uploader.
-  if (uploaderId) {
-    for (const [id, socketInstance] of io.of("/").sockets) {
-      if (id !== uploaderId) {
-        socketInstance.emit('model-uploaded', {
-          url: fileUrl,
-          name: req.file.originalname,
-          id: uuidv4(),
-          sender: uploaderId
-        });
-      }
-    }
-  } else {
-    // Fallback broadcast if uploaderId is not provided.
+  // Only broadcast if the uploader is a host.
+  if (uploaderRole === 'host' && uploaderId) {
+    // Note: no filtering—broadcast event even to the uploader so all clients load from broadcast.
     io.emit('model-uploaded', {
       url: fileUrl,
       name: req.file.originalname,
-      id: uuidv4()
+      id: uuidv4(),
+      sender: uploaderId
     });
+  } else {
+    console.log("Viewer upload detected; not broadcasting upload to other clients.");
   }
 
   res.json({ url: fileUrl, name: req.file.originalname });
