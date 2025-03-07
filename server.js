@@ -42,31 +42,37 @@ const upload = multer({ storage: storage });
 let hostSocketId = null;
 let pendingRequests = {}; // { requestId: { timeout: TimeoutObject, requester: socketId } }
 
+// Buffer for host uploads keyed by their socket ID.
+let hostUploadBuffers = {};
+
 // File Upload Endpoint.
 app.post('/upload', upload.single('model'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
-  // Construct the base URL from environment variable or fallback to request host.
+  // Construct the base URL from the environment variable or fallback to request host.
   const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   console.log("Using baseUrl:", baseUrl);
 
   const fileUrl = `${baseUrl}/uploads/${req.file.filename}`;
 
-  // Extract uploader's socket id and uploader's role from custom headers.
+  // Extract uploader's socket id and role from custom headers.
   const uploaderId = req.headers['x-socket-id'];
   const uploaderRole = req.headers['x-uploader-role'] || 'viewer';
 
-  // Only broadcast if the uploader is a host.
+  // Buffer the file if the uploader is a host.
   if (uploaderRole === 'host' && uploaderId) {
-    // Note: no filtering—broadcast event even to the uploader so all clients load from broadcast.
-    io.emit('model-uploaded', {
+    if (!hostUploadBuffers[uploaderId]) {
+      hostUploadBuffers[uploaderId] = [];
+    }
+    hostUploadBuffers[uploaderId].push({
       url: fileUrl,
       name: req.file.originalname,
       id: uuidv4(),
       sender: uploaderId
     });
+    console.log(`Buffered upload for host ${uploaderId}: ${req.file.originalname}`);
   } else {
     console.log("Viewer upload detected; not broadcasting upload to other clients.");
   }
@@ -141,6 +147,24 @@ io.on('connection', (socket) => {
   socket.on('camera-update', (cameraState) => {
     if (socket.id === hostSocketId) {
       socket.broadcast.emit('camera-update', cameraState);
+    }
+  });
+
+  // When the host signals the upload is complete,
+  // broadcast the aggregated product information.
+  socket.on('product-upload-complete', () => {
+    const uploaderId = socket.id;
+    const partsBuffer = hostUploadBuffers[uploaderId] || [];
+    if (partsBuffer.length > 0) {
+      console.log(`Broadcasting complete product for host ${uploaderId}`);
+      io.emit('product-upload-complete', {
+        parts: partsBuffer,
+        sender: uploaderId
+      });
+      // Clear the buffer once broadcast is complete.
+      hostUploadBuffers[uploaderId] = [];
+    } else {
+      console.log(`No buffered parts found for host ${uploaderId}`);
     }
   });
 
