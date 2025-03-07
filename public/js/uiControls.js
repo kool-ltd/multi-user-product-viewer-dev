@@ -149,9 +149,8 @@ export function setupUIControls(app) {
         });
         if (response.ok) {
           const data = await response.json();
-          // For hosts, skip local load and wait for the broadcast event.
+          // For hosts, skip local load and wait for the aggregated broadcast.
           if (!app.isHost) {
-            // Viewers load the model immediately since they don't receive a broadcast for their own uploads.
             const name = data.name.replace('.glb', '').replace('.gltf', '');
             app.loadModel(data.url, name);
           }
@@ -161,6 +160,16 @@ export function setupUIControls(app) {
       } catch (error) {
         console.error("File upload error:", error);
       }
+    }
+    // For host clients, debounce the signal so that product-upload-complete is sent only once.
+    if (app.isHost) {
+      if (app._productUploadCompleteTimeout) {
+        clearTimeout(app._productUploadCompleteTimeout);
+      }
+      app._productUploadCompleteTimeout = setTimeout(() => {
+        app.socket.emit('product-upload-complete');
+        app._productUploadCompleteTimeout = null;
+      }, 500);
     }
   };
   

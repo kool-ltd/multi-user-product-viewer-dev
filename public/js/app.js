@@ -1,5 +1,3 @@
-// app.js
-
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -102,6 +100,20 @@ class App {
       }
     });
   
+    // Listen for complete product upload from the host.
+    this.socket.on('product-upload-complete', (data) => {
+      console.log("Received complete product upload:", data);
+      if (!this.isHost) {
+        // For viewers, clear existing models before loading the complete product.
+        this.clearExistingModels();
+      }
+      data.parts.forEach(part => {
+        if (!this.loadedModels.has(part.name)) {
+          this.loadModel(part.url, part.name);
+        }
+      });
+    });
+  
     this.socket.on('model-transform', (modelState) => {
       if (!this.isHost) {
         const object = this.loadedModels.get(modelState.customId);
@@ -123,26 +135,6 @@ class App {
           this.orbitControls.target.fromArray(cameraState.target);
           this.orbitControls.update();
         }
-      }
-    });
-    
-    this.socket.on('model-uploaded', (data) => {
-      // Instead of completely ignoring the broadcast from the host,
-      // check if the model is not already loaded.
-      if (this.isHost && data.sender === this.socket.id && !this.loadedModels.has(data.name)) {
-        console.log(`Loading model for host: ${data.name}`);
-        this.loadModel(data.url, data.name);
-        return;
-      }
-    
-      // For viewers, clear any default models before loading the new one.
-      if (!this.isHost) {
-        this.clearExistingModels();
-      }
-    
-      // Load the model if it is not already loaded.
-      if (!this.loadedModels.has(data.name)) {
-        this.loadModel(data.url, data.name);
       }
     });
   }
