@@ -132,6 +132,7 @@ export function setupUIControls(app) {
   fileInput.style.display = 'none';
   fileInput.multiple = true;
   fileInput.onchange = async (event) => {
+    // Clear out any existing models.
     app.clearExistingModels();
     const files = event.target.files;
     for (let file of files) {
@@ -140,14 +141,20 @@ export function setupUIControls(app) {
       try {
         const response = await fetch('/upload', {
           method: 'POST',
+          headers: {
+            'x-socket-id': app.socket.id,
+            'x-uploader-role': app.isHost ? 'host' : 'viewer'
+          },
           body: formData
         });
         if (response.ok) {
           const data = await response.json();
-          // data contains { url, name }
-          const name = data.name.replace('.glb', '').replace('.gltf', '');
-          // Load the model from the server URL.
-          app.loadModel(data.url, name);
+          // For hosts, skip local load and wait for the broadcast event.
+          if (!app.isHost) {
+            // Viewers load the model immediately since they don't receive a broadcast for their own uploads.
+            const name = data.name.replace('.glb', '').replace('.gltf', '');
+            app.loadModel(data.url, name);
+          }
         } else {
           console.error("Upload failed:", response.statusText);
         }

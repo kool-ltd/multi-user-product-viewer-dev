@@ -126,20 +126,21 @@ class App {
       }
     });
     
-    // New event listener for uploaded models:
     this.socket.on('model-uploaded', (data) => {
-      // On host: if this model was uploaded by the host, ignore the duplicate broadcast.
-      if (this.isHost && data.sender === this.socket.id) {
-        console.log(`Ignoring duplicate broadcast for model: ${data.name}`);
+      // Instead of completely ignoring the broadcast from the host,
+      // check if the model is not already loaded.
+      if (this.isHost && data.sender === this.socket.id && !this.loadedModels.has(data.name)) {
+        console.log(`Loading model for host: ${data.name}`);
+        this.loadModel(data.url, data.name);
         return;
       }
-      
-      // On viewer: clear existing (default) models before loading the new one.
+    
+      // For viewers, clear any default models before loading the new one.
       if (!this.isHost) {
         this.clearExistingModels();
       }
-      
-      // Only load the model if it hasn't been loaded already.
+    
+      // Load the model if it is not already loaded.
       if (!this.loadedModels.has(data.name)) {
         this.loadModel(data.url, data.name);
       }
