@@ -10,6 +10,8 @@ export function setupUIControls(app) {
   app.hostRequestPending = false;
   app.hostRequestTimer = null;
   app.currentHostId = null; // Set by the server when a host is active.
+  // New pointer state variable.
+  app.pointerActive = false;
 
   // Create a container for the controls.
   const controlsContainer = document.createElement('div');
@@ -57,7 +59,7 @@ export function setupUIControls(app) {
   // Define actions for the toggle buttons.
   // ------------------------------
 
-  // Viewer button: relinquish host role.
+  // Viewer button: if you are host click to give up host role.
   viewerButton.addEventListener('click', () => {
     if (app.isHost) {
       app.socket.emit('give-up-host');
@@ -76,7 +78,7 @@ export function setupUIControls(app) {
     }
   });
 
-  // Host button.
+  // Host button: toggle to become host.
   hostButton.addEventListener('click', () => {
     if (app.isHost) {
       app.socket.emit('give-up-host');
@@ -109,7 +111,7 @@ export function setupUIControls(app) {
   // Create an Upload button.
   // ------------------------------
   const uploadButton = document.createElement('button');
-  uploadButton.textContent = 'Upload Model';
+  uploadButton.textContent = 'Upload';
   uploadButton.style.padding = '8px 24px';
   uploadButton.style.border = 'none';
   uploadButton.style.outline = 'none';
@@ -161,7 +163,6 @@ export function setupUIControls(app) {
         console.error("File upload error:", error);
       }
     }
-    // For host clients, debounce the signal so that product-upload-complete is sent only once.
     if (app.isHost) {
       if (app._productUploadCompleteTimeout) {
         clearTimeout(app._productUploadCompleteTimeout);
@@ -178,6 +179,75 @@ export function setupUIControls(app) {
   controlsContainer.appendChild(uploadButton);
   controlsContainer.appendChild(fileInput);
   
+  // ------------------------------
+  // Create an extra pointer toggle button.
+  // ------------------------------
+  // This button allows the host to toggle a pointer that broadcasts where they are pointing.
+  // It is always added but only visible when app.isHost is true.
+  const pointerToggleButton = document.createElement('button');
+  pointerToggleButton.textContent = 'Pointer';
+  pointerToggleButton.style.padding = '8px 24px';
+  pointerToggleButton.style.border = 'none';
+  pointerToggleButton.style.outline = 'none';
+  pointerToggleButton.style.borderRadius = '9999px';
+  pointerToggleButton.style.backgroundColor = '#d00024';
+  pointerToggleButton.style.color = 'white';
+  pointerToggleButton.style.cursor = 'pointer';
+  pointerToggleButton.style.transition = 'background-color 0.3s ease, color 0.3s ease';
+  // Set initial display based on host state.
+  pointerToggleButton.style.display = app.isHost ? 'inline-block' : 'none';
+
+  pointerToggleButton.addEventListener('click', () => {
+    // Toggle pointer state on the host.
+    app.pointerActive = !app.pointerActive;
+    
+    if (app.pointerActive) {
+      // Change button style: red background with white text.
+      pointerToggleButton.style.backgroundColor = '#ffffff';
+      pointerToggleButton.style.color = '#d00024';
+      
+      // Create the pointer as a group of two spheres: a red dot and a white outline.
+      if (!app.hostPointer) {
+        const pointerRadius = 0.005; // Reduced size: 1/10 of the original 0.05
+        // Create the red inner sphere.
+        const redMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(pointerRadius, 16, 16),
+          new THREE.MeshBasicMaterial({ color: 0xff0000 })
+        );
+        // Create the white outline by cloning the red sphere,
+        // setting its material to white with a backside render, and scaling it up.
+        const outlineMesh = redMesh.clone();
+        outlineMesh.material = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          side: THREE.BackSide
+        });
+        outlineMesh.scale.multiplyScalar(1.5); // Increase scale for a thicker white stroke.
+        
+        // Group both meshes.
+        const pointerGroup = new THREE.Group();
+        pointerGroup.add(outlineMesh);
+        pointerGroup.add(redMesh);
+        
+        app.hostPointer = pointerGroup;
+        app.scene.add(app.hostPointer);
+      }
+    } else {
+      // Change button style: white background with red text.
+      pointerToggleButton.style.backgroundColor = '#d00024';
+      pointerToggleButton.style.color = '#ffffff';
+      
+      if (app.hostPointer) {
+        app.scene.remove(app.hostPointer);
+        app.hostPointer = null;
+      }
+    }
+    
+    // Broadcast the current pointer toggle state to viewers.
+    app.socket.emit('host-pointer-toggle', { active: app.pointerActive });
+  });
+  
+  controlsContainer.appendChild(pointerToggleButton);
+
   // ------------------------------
   // Optional: AR Button (if supported).
   // ------------------------------
@@ -213,7 +283,7 @@ export function setupUIControls(app) {
   document.body.appendChild(controlsContainer);
   
   // Save references to the buttons.
-  app.toggleUI = { viewerButton, hostButton };
+  app.toggleUI = { viewerButton, hostButton, pointerToggleButton };
 }
 
 export function updateToggleUI(app, viewerButton, hostButton, isHost) {
@@ -222,10 +292,16 @@ export function updateToggleUI(app, viewerButton, hostButton, isHost) {
     hostButton.style.color = '#d00024';
     viewerButton.style.backgroundColor = 'transparent';
     viewerButton.style.color = 'white';
+    if (app.toggleUI && app.toggleUI.pointerToggleButton) {
+      app.toggleUI.pointerToggleButton.style.display = 'inline-block';
+    }
   } else {
     viewerButton.style.backgroundColor = 'white';
     viewerButton.style.color = '#d00024';
     hostButton.style.backgroundColor = 'transparent';
     hostButton.style.color = 'white';
+    if (app.toggleUI && app.toggleUI.pointerToggleButton) {
+      app.toggleUI.pointerToggleButton.style.display = 'none';
+    }
   }
 }
