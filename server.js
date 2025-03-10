@@ -168,6 +168,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  //
+  // --- Pointer Broadcasting Logic ---
+  //
+  // Relay the pointer toggle event.
+  socket.on('host-pointer-toggle', (data) => {
+    socket.broadcast.emit('host-pointer-toggle', data);
+  });
+  // Relay the pointer position update.
+  socket.on('host-pointer-update', (data) => {
+    socket.broadcast.emit('host-pointer-update', data);
+  });
+
   socket.on('disconnect', () => {
     if (socket.id === hostSocketId) {
       hostSocketId = null;
