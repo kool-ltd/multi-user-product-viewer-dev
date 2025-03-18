@@ -59,7 +59,7 @@ export function setupUIControls(app) {
   // Define actions for the toggle buttons.
   // ------------------------------
 
-  // Viewer button: if you are host click to give up host role.
+  // Viewer button: if you're host click to give up host role.
   viewerButton.addEventListener('click', () => {
     if (app.isHost) {
       app.socket.emit('give-up-host');
@@ -108,7 +108,7 @@ export function setupUIControls(app) {
   controlsContainer.appendChild(toggleContainer);
 
   // ------------------------------
-  // Create an Upload button.
+  // Create the Upload button.
   // ------------------------------
   const uploadButton = document.createElement('button');
   uploadButton.textContent = 'Upload';
@@ -177,6 +177,53 @@ export function setupUIControls(app) {
   uploadButton.onclick = () => fileInput.click();
   
   controlsContainer.appendChild(uploadButton);
+  
+  // ------------------------------
+  // Create a Reset button.
+  // ------------------------------
+  const resetButton = document.createElement('button');
+  resetButton.textContent = 'Reset';
+  resetButton.style.padding = '8px 24px';
+  resetButton.style.border = 'none';
+  resetButton.style.outline = 'none';
+  resetButton.style.borderRadius = '9999px';
+  resetButton.style.backgroundColor = '#d00024';
+  resetButton.style.color = 'white';
+  resetButton.style.cursor = 'pointer';
+  resetButton.style.transition = 'background-color 0.3s ease, color 0.3s ease';
+  
+  resetButton.addEventListener('mouseover', () => {
+    resetButton.style.backgroundColor = '#b0001d';
+  });
+  resetButton.addEventListener('mouseout', () => {
+    resetButton.style.backgroundColor = '#d00024';
+  });
+  
+  resetButton.onclick = () => {
+    // Reset the transformation (position, rotation, and scale) of all parts.
+    if (app.productGroup) {
+      app.productGroup.children.forEach((child) => {
+        child.position.set(0, 0, 0);
+        child.rotation.set(0, 0, 0);
+        // Reset to the stored original scale or default to (1, 1, 1)
+        if (child.children.length > 0 && child.children[0].userData.originalScale) {
+          child.scale.copy(child.children[0].userData.originalScale);
+        } else {
+          child.scale.set(1, 1, 1);
+        }
+      });
+    }
+    // Reset the camera/viewport to its initial state.
+    if (typeof app.fitCameraToScene === 'function') {
+      app.fitCameraToScene();
+    }
+    // If host, broadcast the reset event to all viewers.
+    if (app.isHost) {
+      app.socket.emit('reset-all');
+    }
+  };
+  
+  controlsContainer.appendChild(resetButton);
   controlsContainer.appendChild(fileInput);
   
   // ------------------------------
@@ -198,51 +245,64 @@ export function setupUIControls(app) {
   pointerToggleButton.style.display = app.isHost ? 'inline-block' : 'none';
 
   pointerToggleButton.addEventListener('click', () => {
-    // Toggle pointer state on the host.
+    // Toggle the pointer state.
     app.pointerActive = !app.pointerActive;
     
     if (app.pointerActive) {
-      // Change button style: red background with white text.
+      // Change button style for active pointer.
       pointerToggleButton.style.backgroundColor = '#ffffff';
       pointerToggleButton.style.color = '#d00024';
       
-      // Create the pointer as a group of two spheres: a red dot and a white outline.
+      // Create host pointer if it doesn't exist.
       if (!app.hostPointer) {
-        const pointerRadius = 0.005; // Reduced size: 1/10 of the original 0.05
-        // Create the red inner sphere.
+        const pointerRadius = 0.005;
         const redMesh = new THREE.Mesh(
           new THREE.SphereGeometry(pointerRadius, 16, 16),
           new THREE.MeshBasicMaterial({ color: 0xff0000 })
         );
-        // Create the white outline by cloning the red sphere,
-        // setting its material to white with a backside render, and scaling it up.
         const outlineMesh = redMesh.clone();
         outlineMesh.material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
           side: THREE.BackSide
         });
-        outlineMesh.scale.multiplyScalar(1.5); // Increase scale for a thicker white stroke.
-        
-        // Group both meshes.
+        outlineMesh.scale.multiplyScalar(1.5);
         const pointerGroup = new THREE.Group();
         pointerGroup.add(outlineMesh);
         pointerGroup.add(redMesh);
-        
         app.hostPointer = pointerGroup;
         app.scene.add(app.hostPointer);
       }
+      
+      // Disable movement of parts: Save current draggable objects and clear them.
+      if (app.interactionManager &&
+          typeof app.interactionManager.getDraggableObjects === 'function' &&
+          typeof app.interactionManager.setDraggableObjects === 'function') {
+            app._savedDraggableObjects = app.interactionManager.getDraggableObjects();
+            app.interactionManager.setDraggableObjects([]); // Disable dragging.
+            console.log("disable dragging");
+          }
     } else {
-      // Change button style: white background with red text.
+      // Revert button style when pointer is off.
       pointerToggleButton.style.backgroundColor = '#d00024';
       pointerToggleButton.style.color = '#ffffff';
       
+      // Remove the host pointer if it exists.
       if (app.hostPointer) {
         app.scene.remove(app.hostPointer);
         app.hostPointer = null;
       }
+      
+      // Re-enable movement of parts by restoring previously saved draggable objects.
+      if (app.interactionManager &&
+          typeof app.interactionManager.setDraggableObjects === 'function' &&
+          app._savedDraggableObjects) {
+            console.log("enable dragging");
+            app.interactionManager.setDraggableObjects(app._savedDraggableObjects);
+            app._savedDraggableObjects = [];
+      }
     }
     
-    // Broadcast the current pointer toggle state to viewers.
+    // Broadcast the new pointer state.
     app.socket.emit('host-pointer-toggle', { active: app.pointerActive });
   });
   
