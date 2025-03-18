@@ -131,6 +131,26 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('cancel-host-request', () => {
+    console.log(`Received cancel-host-request from ${socket.id}`);
+    let found = false;
+    for (const reqId in pendingRequests) {
+      if (pendingRequests[reqId].requester === socket.id) {
+        console.log(`Found pending request ${reqId} for ${socket.id}`);
+        clearTimeout(pendingRequests[reqId].timeout);
+        delete pendingRequests[reqId];
+        found = true;
+        // Emit the cancellation event to the current host.
+        if (hostSocketId) {
+          io.to(hostSocketId).emit('host-request-cancelled', { requestId: reqId });
+        }
+      }
+    }
+    if (!found) {
+      console.log(`No pending host request found for ${socket.id}`);
+    }
+  });
+
   socket.on('give-up-host', () => {
     if (socket.id === hostSocketId) {
       hostSocketId = null;
@@ -147,6 +167,12 @@ io.on('connection', (socket) => {
   socket.on('camera-update', (cameraState) => {
     if (socket.id === hostSocketId) {
       socket.broadcast.emit('camera-update', cameraState);
+    }
+  });
+  
+  socket.on('reset-all', (resetAll) => {
+    if (socket.id === hostSocketId) {
+      socket.broadcast.emit('reset-all', resetAll);
     }
   });
 
